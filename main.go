@@ -18,7 +18,7 @@ var (
 		GitHubToken    string        `flag:"github-token" env:"GITHUB_TOKEN" description:"The GitHub token for authentication at the GitHub API"`
 		GitHubOrg      string        `flag:"github-org" env:"GITHUB_ORG" description:"The GitHub organization to fetch repositories from"`
 		GitHubRepoType string        `flag:"github-repo-type" env:"GITHUB_REPO_TYPE" default:"private" description:"Type of GitHub repos to list. Options: all, public, private, forks, sources, member"`
-		PollInterval   time.Duration `flag:"poll-interval" env:"POLL_INTERVAL" description:"Interval in which GitHub repos should be polled"`
+		PollInterval   time.Duration `flag:"poll-interval" env:"POLL_INTERVAL" default:"5m" description:"Interval in which GitHub repos should be polled"`
 	}
 	ghClient *github.Client
 )
