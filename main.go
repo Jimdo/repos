@@ -3,7 +3,7 @@ package main
 import (
 	"log"
 	"net/http"
-	"sort"
+	"time"
 
 	"golang.org/x/oauth2"
 
@@ -14,10 +14,11 @@ import (
 
 var (
 	config struct {
-		Address        string `flag:"addr" default:":3000" description:"IP/Port to listen on"`
-		GitHubToken    string `flag:"github-token" env:"GITHUB_TOKEN" description:"The GitHub token for authentication at the GitHub API"`
-		GitHubOrg      string `flag:"github-org" env:"GITHUB_ORG" description:"The GitHub organization to fetch repositories from"`
-		GitHubRepoType string `flag:"github-repo-type" env:"GITHUB_REPO_TYPE" default:"private" description:"Type of GitHub repos to list. Options: all, public, private, forks, sources, member"`
+		Address        string        `flag:"addr" default:":3000" description:"IP/Port to listen on"`
+		GitHubToken    string        `flag:"github-token" env:"GITHUB_TOKEN" description:"The GitHub token for authentication at the GitHub API"`
+		GitHubOrg      string        `flag:"github-org" env:"GITHUB_ORG" description:"The GitHub organization to fetch repositories from"`
+		GitHubRepoType string        `flag:"github-repo-type" env:"GITHUB_REPO_TYPE" default:"private" description:"Type of GitHub repos to list. Options: all, public, private, forks, sources, member"`
+		PollInterval   time.Duration `flag:"poll-interval" env:"POLL_INTERVAL" description:"Interval in which GitHub repos should be polled"`
 	}
 	ghClient *github.Client
 )
@@ -36,71 +37,26 @@ func init() {
 }
 
 func main() {
+	repoMetadataService := NewRepoMetadataService(RepoMetadataServiceConfig{
+		GitHubToken:    config.GitHubToken,
+		GitHubOrg:      config.GitHubOrg,
+		GitHubRepoType: config.GitHubRepoType,
+		PollInterval:   config.PollInterval,
+	})
+	s := NewServer(ServerConfig{
+		Address:             config.Address,
+		RepoMetadataService: repoMetadataService,
+	})
+
+	errors := repoMetadataService.StartPolling()
+	go func() {
+		err := <-errors
+		log.Fatalf("Error polling GitHub repos: %s", err)
+	}()
+
 	r := mux.NewRouter()
-	r.HandleFunc("/all", handleAllReposRequest)
-	r.HandleFunc("/travis", handleTravisReposRequest)
-	r.HandleFunc("/healthcheck", func(res http.ResponseWriter, r *http.Request) { http.Error(res, "OK", http.StatusOK) })
-	http.ListenAndServe(config.Address, r)
-}
-
-func handleAllReposRequest(w http.ResponseWriter, req *http.Request) {
-	repos, err := fetchRepoNames()
-	if err != nil {
-		jsonError(w, err)
-		return
-	}
-	jsonResponse(w, repos)
-}
-
-func handleTravisReposRequest(w http.ResponseWriter, req *http.Request) {
-	repos, err := fetchRepoNames()
-	if err != nil {
-		jsonError(w, err)
-		return
-	}
-	repos, err = filterTravisRepos(repos)
-	if err != nil {
-		jsonError(w, err)
-		return
-	}
-	jsonResponse(w, repos)
-}
-
-func fetchRepoNames() ([]string, error) {
-	var (
-		opt = &github.RepositoryListByOrgOptions{
-			ListOptions: github.ListOptions{PerPage: 30},
-			Type:        config.GitHubRepoType,
-		}
-		result []string
-	)
-
-	for {
-		repos, resp, err := ghClient.Repositories.ListByOrg(config.GitHubOrg, opt)
-		if err != nil {
-			return []string{}, err
-		}
-		for _, repo := range repos {
-			result = append(result, *repo.Name)
-		}
-		if resp.NextPage == 0 {
-			break
-		}
-		opt.ListOptions.Page = resp.NextPage
-	}
-
-	sort.Strings(result)
-
-	return result, nil
-}
-
-func filterTravisRepos(repos []string) ([]string, error) {
-	var result []string
-	for _, repo := range repos {
-		_, _, _, err := ghClient.Repositories.GetContents(config.GitHubOrg, repo, ".travis.yml", &github.RepositoryContentGetOptions{})
-		if err == nil {
-			result = append(result, repo)
-		}
-	}
-	return result, nil
+	r.HandleFunc("/v1/all", s.HandleAllReposRequest)
+	r.HandleFunc("/v1/travis", s.HandleTravisReposRequest)
+	r.HandleFunc("/v1/healthcheck", s.HandleHealthCheckRequest)
+	log.Fatal(http.ListenAndServe(config.Address, r))
 }
