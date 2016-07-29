@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -114,8 +115,8 @@ func (s *RepoMetadataService) pollRepos() error {
 
 	s.cacheLock.Lock()
 	defer s.cacheLock.Unlock()
-	s.cache.allRepos = allRepos
-	s.cache.travisRepos = travisRepos
+	s.cache.allRepos = s.prefixOrg(allRepos)
+	s.cache.travisRepos = s.prefixOrg(travisRepos)
 	return nil
 }
 
@@ -129,4 +130,12 @@ func (s *RepoMetadataService) TravisRepos() []string {
 	s.cacheLock.RLock()
 	defer s.cacheLock.RUnlock()
 	return s.cache.travisRepos
+}
+
+func (s *RepoMetadataService) prefixOrg(repos []string) []string {
+	var result []string
+	for _, repo := range repos {
+		result = append(result, fmt.Sprintf("%s/%s", s.ghOrg, repo))
+	}
+	return result
 }
