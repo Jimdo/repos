@@ -9,4 +9,4 @@ RUN go install -v
 
 ENTRYPOINT ["repos"]
 
-EXPOSE 8000
+EXPOSE 3000
