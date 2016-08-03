@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"net/http"
+	"net/url"
 	"sort"
 	"sync"
 	"time"
@@ -9,6 +11,7 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/google/go-github/github"
+	"github.com/gregjones/httpcache"
 )
 
 const (
@@ -28,12 +31,14 @@ func NewRepoMetadataService(config RepoMetadataServiceConfig) *RepoMetadataServi
 	}
 
 	return &RepoMetadataService{
-		ghClient: github.NewClient(oauth2.NewClient(
-			oauth2.NoContext,
-			oauth2.StaticTokenSource(
-				&oauth2.Token{AccessToken: config.GitHubToken},
-			),
-		)),
+		ghClient: github.NewClient(&http.Client{
+			Transport: &oauth2.Transport{
+				Base: httpcache.NewMemoryCacheTransport(),
+				Source: oauth2.ReuseTokenSource(nil, oauth2.StaticTokenSource(
+					&oauth2.Token{AccessToken: config.GitHubToken},
+				)),
+			},
+		}),
 		ghOrg:        config.GitHubOrg,
 		ghRepoType:   repoType,
 		pollInterval: pollInterval,
@@ -107,8 +112,11 @@ func (s *RepoMetadataService) pollRepos() error {
 	sort.Strings(allRepos)
 
 	for _, repo := range allRepos {
-		_, _, _, err := s.ghClient.Repositories.GetContents(config.GitHubOrg, repo, ".travis.yml", &github.RepositoryContentGetOptions{})
-		if err == nil {
+		hasFile, err := s.hasFile(config.GitHubOrg, repo, ".travis.yml")
+		if err != nil {
+			return err
+		}
+		if hasFile {
 			travisRepos = append(travisRepos, repo)
 		}
 	}
@@ -130,6 +138,28 @@ func (s *RepoMetadataService) TravisRepos() []string {
 	s.cacheLock.RLock()
 	defer s.cacheLock.RUnlock()
 	return s.cache.travisRepos
+}
+
+// hasFile requests a file from a repository in raw format and returns true if
+// the file exists.
+// The reason for using the raw format is that these responses can be cached.
+// Regular JSON responses contain one-time tokens and therefore different etags.
+//
+// Code is an adapted version of https://github.com/google/go-github/blob/56add9d4071bb1a06003a1239ebbc1500692b55d/github/repos_contents.go#L158-L169
+func (s *RepoMetadataService) hasFile(owner, repo, filename string) (bool, error) {
+	escapedPath := (&url.URL{Path: filename}).String()
+	u := fmt.Sprintf("repos/%s/%s/contents/%s", owner, repo, escapedPath)
+	req, err := s.ghClient.NewRequest("GET", u, nil)
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Accept", "application/vnd.github.v3.raw")
+
+	resp, err := s.ghClient.Do(req, nil)
+	if resp != nil {
+		return resp.StatusCode == http.StatusOK, nil
+	}
+	return false, err
 }
 
 func (s *RepoMetadataService) prefixOrg(repos []string) []string {
